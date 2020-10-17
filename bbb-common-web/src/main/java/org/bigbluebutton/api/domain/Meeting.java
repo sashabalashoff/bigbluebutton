@@ -97,6 +97,11 @@ public class Meeting {
 
 	public final Boolean allowDuplicateExtUserid;
 
+	private String meetingEndedCallbackURL = "";
+
+	public final Boolean endWhenNoModerator;
+
+
     public Meeting(Meeting.Builder builder) {
         name = builder.name;
         extMeetingId = builder.externalId;
@@ -125,7 +130,8 @@ public class Meeting {
         guestPolicy = builder.guestPolicy;
         breakoutRoomsParams = builder.breakoutRoomsParams;
         lockSettingsParams = builder.lockSettingsParams;
-		allowDuplicateExtUserid = builder.allowDuplicateExtUserid;
+        allowDuplicateExtUserid = builder.allowDuplicateExtUserid;
+        endWhenNoModerator = builder.endWhenNoModerator;
 
         userCustomData = new HashMap<>();
 
@@ -194,6 +200,13 @@ public class Meeting {
 
 	public ConcurrentMap<String, User> getUsersMap() {
 	    return users;
+	}
+
+	public void guestIsWaiting(String userId) {
+		RegisteredUser ruser = registeredUsers.get(userId);
+		if (ruser != null) {
+			ruser.updateGuestWaitedOn();
+		}
 	}
 
 	public void setGuestStatusWithId(String userId, String guestStatus) {
@@ -553,22 +566,6 @@ public class Meeting {
 		userCustomData.put(userID, data);
 	}
 
-	public void setMaxInactivityTimeoutMinutes(Integer value) {
-		maxInactivityTimeoutMinutes = value;
-	}
-
-	public void setWarnMinutesBeforeMax(Integer value) {
-		warnMinutesBeforeMax = value;
-	}
-
-	public Integer getMaxInactivityTimeoutMinutes() {
-		return maxInactivityTimeoutMinutes;
-	}
-
-	public Integer getWarnMinutesBeforeMax() {
-		return warnMinutesBeforeMax;
-	}
-
 	public void setMeetingExpireWhenLastUserLeftInMinutes(Integer value) {
 		meetingExpireWhenLastUserLeftInMinutes = value;
 	}
@@ -608,6 +605,14 @@ public class Meeting {
 
     public void setUserActivitySignResponseDelayInMinutes(Integer userActivitySignResponseDelayInMinutes) {
         this.userActivitySignResponseDelayInMinutes = userActivitySignResponseDelayInMinutes;
+    }
+
+    public String getMeetingEndedCallbackURL() {
+    	return meetingEndedCallbackURL;
+    }
+
+    public void setMeetingEndedCallbackURL(String meetingEndedCallbackURL) {
+    	this.meetingEndedCallbackURL = meetingEndedCallbackURL;
     }
 
 	public Map<String, Object> getUserCustomData(String userID){
@@ -659,6 +664,7 @@ public class Meeting {
     	private BreakoutRoomsParams breakoutRoomsParams;
     	private LockSettingsParams lockSettingsParams;
 		private Boolean allowDuplicateExtUserid;
+		private Boolean endWhenNoModerator;
 
     	public Builder(String externalId, String internalId, long createTime) {
     		this.externalId = externalId;
@@ -788,6 +794,11 @@ public class Meeting {
 
 		public Builder withAllowDuplicateExtUserid(Boolean allowDuplicateExtUserid) {
     		this.allowDuplicateExtUserid = allowDuplicateExtUserid;
+    		return this;
+		}
+
+		public Builder withEndWhenNoModerator(Boolean endWhenNoModerator) {
+    		this.endWhenNoModerator = endWhenNoModerator;
     		return this;
 		}
     

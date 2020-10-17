@@ -129,8 +129,7 @@ class BbbWebApiGWApp(
                     freeJoin: java.lang.Boolean,
                     metadata: java.util.Map[String, String], guestPolicy: String,
                     welcomeMsgTemplate: String, welcomeMsg: String, modOnlyMessage: String,
-                    dialNumber: String, maxUsers: java.lang.Integer, maxInactivityTimeoutMinutes: java.lang.Integer,
-                    warnMinutesBeforeMax:                   java.lang.Integer,
+                    dialNumber: String, maxUsers: java.lang.Integer,
                     meetingExpireIfNoUserJoinedInMinutes:   java.lang.Integer,
                     meetingExpireWhenLastUserLeftInMinutes: java.lang.Integer,
                     userInactivityInspectTimerInMinutes:    java.lang.Integer,
@@ -147,8 +146,6 @@ class BbbWebApiGWApp(
     val durationProps = DurationProps(
       duration = duration.intValue(),
       createdTime = createTime.longValue(), createDate,
-      maxInactivityTimeoutMinutes = maxInactivityTimeoutMinutes.intValue(),
-      warnMinutesBeforeMax = warnMinutesBeforeMax.intValue(),
       meetingExpireIfNoUserJoinedInMinutes = meetingExpireIfNoUserJoinedInMinutes.intValue(),
       meetingExpireWhenLastUserLeftInMinutes = meetingExpireWhenLastUserLeftInMinutes.intValue(),
       userInactivityInspectTimerInMinutes = userInactivityInspectTimerInMinutes.intValue(),
@@ -237,6 +234,11 @@ class BbbWebApiGWApp(
     msgToAkkaAppsEventBus.publish(MsgToAkkaApps(toAkkaAppsChannel, event))
   }
 
+  def guestWaitingLeft(meetingId: String, intUserId: String): Unit = {
+    val event = MsgBuilder.buildGuestWaitingLeftMsg(meetingId, intUserId)
+    msgToAkkaAppsEventBus.publish(MsgToAkkaApps(toAkkaAppsChannel, event))
+  }
+
   def destroyMeeting(msg: DestroyMeetingMessage): Unit = {
     val event = MsgBuilder.buildDestroyMeetingSysCmdMsg(msg)
     msgToAkkaAppsEventBus.publish(MsgToAkkaApps(toAkkaAppsChannel, event))
@@ -286,12 +288,21 @@ class BbbWebApiGWApp(
     if (msg.isInstanceOf[DocPageGeneratedProgress]) {
       val event = MsgBuilder.buildPresentationPageGeneratedPubMsg(msg.asInstanceOf[DocPageGeneratedProgress])
       msgToAkkaAppsEventBus.publish(MsgToAkkaApps(toAkkaAppsChannel, event))
+
+      // Send new event with page urls
+      val newEvent = MsgBuilder.buildPresentationPageConvertedSysMsg(msg.asInstanceOf[DocPageGeneratedProgress])
+      msgToAkkaAppsEventBus.publish(MsgToAkkaApps(toAkkaAppsChannel, newEvent))
     } else if (msg.isInstanceOf[OfficeDocConversionProgress]) {
       val event = MsgBuilder.buildPresentationConversionUpdateSysPubMsg(msg.asInstanceOf[OfficeDocConversionProgress])
       msgToAkkaAppsEventBus.publish(MsgToAkkaApps(toAkkaAppsChannel, event))
     } else if (msg.isInstanceOf[DocPageCompletedProgress]) {
       val event = MsgBuilder.buildPresentationConversionCompletedSysPubMsg(msg.asInstanceOf[DocPageCompletedProgress])
       msgToAkkaAppsEventBus.publish(MsgToAkkaApps(toAkkaAppsChannel, event))
+
+      // Send new event with page urls
+      val newEvent = MsgBuilder.buildPresentationConversionEndedSysMsg(msg.asInstanceOf[DocPageCompletedProgress])
+      msgToAkkaAppsEventBus.publish(MsgToAkkaApps(toAkkaAppsChannel, newEvent))
+
     } else if (msg.isInstanceOf[DocPageCountFailed]) {
       val event = MsgBuilder.buildPresentationPageCountFailedSysPubMsg(msg.asInstanceOf[DocPageCountFailed])
       msgToAkkaAppsEventBus.publish(MsgToAkkaApps(toAkkaAppsChannel, event))
@@ -300,6 +311,12 @@ class BbbWebApiGWApp(
       msgToAkkaAppsEventBus.publish(MsgToAkkaApps(toAkkaAppsChannel, event))
     } else if (msg.isInstanceOf[PdfConversionInvalid]) {
       val event = MsgBuilder.buildPdfConversionInvalidErrorSysPubMsg(msg.asInstanceOf[PdfConversionInvalid])
+      msgToAkkaAppsEventBus.publish(MsgToAkkaApps(toAkkaAppsChannel, event))
+    } else if (msg.isInstanceOf[DocConversionRequestReceived]) {
+      val event = MsgBuilder.buildPresentationConversionRequestReceivedSysMsg(msg.asInstanceOf[DocConversionRequestReceived])
+      msgToAkkaAppsEventBus.publish(MsgToAkkaApps(toAkkaAppsChannel, event))
+    } else if (msg.isInstanceOf[DocPageConversionStarted]) {
+      val event = MsgBuilder.buildPresentationPageConversionStartedSysMsg(msg.asInstanceOf[DocPageConversionStarted])
       msgToAkkaAppsEventBus.publish(MsgToAkkaApps(toAkkaAppsChannel, event))
     }
   }

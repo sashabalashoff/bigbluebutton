@@ -40,6 +40,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 
+import org.apache.commons.lang3.StringUtils;
 import org.apache.http.client.utils.URIBuilder;
 import org.bigbluebutton.api.domain.GuestPolicy;
 import org.bigbluebutton.api.domain.Meeting;
@@ -84,6 +85,7 @@ import org.bigbluebutton.api2.domain.UploadedTrack;
 import org.bigbluebutton.common2.redis.RedisStorageService;
 import org.bigbluebutton.presentation.PresentationUrlDownloadService;
 import org.bigbluebutton.web.services.RegisteredUserCleanupTimerTask;
+import org.bigbluebutton.web.services.WaitingGuestCleanupTimerTask;
 import org.bigbluebutton.web.services.callback.CallbackUrlService;
 import org.bigbluebutton.web.services.callback.MeetingEndedEvent;
 import org.bigbluebutton.web.services.turn.StunTurnService;
@@ -109,6 +111,7 @@ public class MeetingService implements MessageListener {
 
   private RecordingService recordingService;
   private RegisteredUserCleanupTimerTask registeredUserCleaner;
+  private WaitingGuestCleanupTimerTask waitingGuestCleaner;
   private StunTurnService stunTurnService;
   private RedisStorageService storeService;
   private CallbackUrlService callbackUrlService;
@@ -201,6 +204,38 @@ public class MeetingService implements MessageListener {
     }
   }
 
+  public void guestIsWaiting(String meetingId, String userId) {
+    Meeting m = getMeeting(meetingId);
+    if (m != null) {
+      m.guestIsWaiting(userId);
+    }
+  }
+
+  /**
+   * Remove registered waiting guest users who left the waiting page.
+   */
+  public void purgeWaitingGuestUsers() {
+    for (AbstractMap.Entry<String, Meeting> entry : this.meetings.entrySet()) {
+      Long now = System.currentTimeMillis();
+      Meeting meeting = entry.getValue();
+
+      ConcurrentMap<String, User> users = meeting.getUsersMap();
+
+      for (AbstractMap.Entry<String, RegisteredUser> registeredUser : meeting.getRegisteredUsers().entrySet()) {
+        String registeredUserID = registeredUser.getKey();
+        RegisteredUser ru = registeredUser.getValue();
+
+        long elapsedTime = now - ru.getGuestWaitedOn();
+        if (elapsedTime >= 15000 && ru.getGuestStatus() == GuestPolicy.WAIT) {
+          if (meeting.userUnregistered(registeredUserID) != null) {
+            gw.guestWaitingLeft(meeting.getInternalId(), registeredUserID);
+          };
+        }
+      }
+    }
+  }
+
+
   private void kickOffProcessingOfRecording(Meeting m) {
     if (m.isRecord() && m.getNumUsers() == 0) {
       processRecording(m);
@@ -272,8 +307,10 @@ public class MeetingService implements MessageListener {
 
   public synchronized boolean createMeeting(Meeting m) {
     String internalMeetingId = paramsProcessorUtil.convertToInternalMeetingId(m.getExternalId());
-    Meeting existing = getNotEndedMeetingWithId(internalMeetingId);
-    if (existing == null) {
+    Meeting existingId = getNotEndedMeetingWithId(internalMeetingId);
+    Meeting existingTelVoice = getNotEndedMeetingWithTelVoice(m.getTelVoice());
+    Meeting existingWebVoice = getNotEndedMeetingWithWebVoice(m.getWebVoice());
+    if (existingId == null && existingTelVoice == null && existingWebVoice == null) {
       meetings.put(m.getInternalId(), m);
       handle(new CreateMeeting(m));
       return true;
@@ -341,7 +378,7 @@ public class MeetingService implements MessageListener {
             m.getWebcamsOnlyForModerator(), m.getModeratorPassword(), m.getViewerPassword(), m.getCreateTime(),
             formatPrettyDate(m.getCreateTime()), m.isBreakout(), m.getSequence(), m.isFreeJoin(), m.getMetadata(),
             m.getGuestPolicy(), m.getWelcomeMessageTemplate(), m.getWelcomeMessage(), m.getModeratorOnlyMessage(),
-            m.getDialNumber(), m.getMaxUsers(), m.getMaxInactivityTimeoutMinutes(), m.getWarnMinutesBeforeMax(),
+            m.getDialNumber(), m.getMaxUsers(),
             m.getMeetingExpireIfNoUserJoinedInMinutes(), m.getmeetingExpireWhenLastUserLeftInMinutes(),
             m.getUserInactivityInspectTimerInMinutes(), m.getUserInactivityThresholdInMinutes(),
             m.getUserActivitySignResponseDelayInMinutes(), m.getMuteOnStart(), m.getAllowModsToUnmuteUsers(), keepEvents,
@@ -425,6 +462,32 @@ public class MeetingService implements MessageListener {
           String key = entry.getKey();
           if (key.startsWith(meetingId)) {
               Meeting m = entry.getValue();
+              if (!m.isForciblyEnded())
+                  return m;
+          }
+      }
+      return null;
+  }
+
+  public Meeting getNotEndedMeetingWithTelVoice(String telVoice) {
+      if (telVoice == null)
+          return null;
+      for (Map.Entry<String, Meeting> entry : meetings.entrySet()) {
+          Meeting m = entry.getValue();
+          if (telVoice.equals(m.getTelVoice())) {
+              if (!m.isForciblyEnded())
+                  return m;
+          }
+      }
+      return null;
+  }
+
+  public Meeting getNotEndedMeetingWithWebVoice(String webVoice) {
+      if (webVoice == null)
+          return null;
+      for (Map.Entry<String, Meeting> entry : meetings.entrySet()) {
+          Meeting m = entry.getValue();
+          if (webVoice.equals(m.getWebVoice())) {
               if (!m.isForciblyEnded())
                   return m;
           }
@@ -768,24 +831,35 @@ public class MeetingService implements MessageListener {
 
       String endCallbackUrl = "endCallbackUrl".toLowerCase();
       Map<String, String> metadata = m.getMetadata();
-      if (!m.isBreakout() && metadata.containsKey(endCallbackUrl)) {
-        String callbackUrl = metadata.get(endCallbackUrl);
-        try {
+      if (!m.isBreakout()) {
+        if (metadata.containsKey(endCallbackUrl)) {
+          String callbackUrl = metadata.get(endCallbackUrl);
+          try {
             callbackUrl = new URIBuilder(new URI(callbackUrl))
-                    .addParameter("recordingmarks", m.haveRecordingMarks() ? "true" : "false")
-                    .addParameter("meetingID", m.getExternalId()).build().toURL().toString();
-            callbackUrlService.handleMessage(new MeetingEndedEvent(m.getInternalId(), m.getExternalId(), m.getName(), callbackUrl));
-        } catch (MalformedURLException e) {
-            log.error("Malformed URL in callback url=[{}]", callbackUrl, e);
-        } catch (URISyntaxException e) {
-            log.error("URI Syntax error in callback url=[{}]", callbackUrl, e);
-        } catch (Exception e) {
-          log.error("Error in callback url=[{}]", callbackUrl, e);
+              .addParameter("recordingmarks", m.haveRecordingMarks() ? "true" : "false")
+              .addParameter("meetingID", m.getExternalId()).build().toURL().toString();
+            MeetingEndedEvent event = new MeetingEndedEvent(m.getInternalId(), m.getExternalId(), m.getName(), callbackUrl);
+            processMeetingEndedCallback(event);
+          } catch (Exception e) {
+            log.error("Error in callback url=[{}]", callbackUrl, e);
+          }
         }
 
+        if (! StringUtils.isEmpty(m.getMeetingEndedCallbackURL())) {
+          String meetingEndedCallbackURL = m.getMeetingEndedCallbackURL();
+          callbackUrlService.handleMessage(new MeetingEndedEvent(m.getInternalId(), m.getExternalId(), m.getName(), meetingEndedCallbackURL));
+        }
       }
 
       processRemoveEndedMeeting(message);
+    }
+  }
+
+  private void processMeetingEndedCallback(MeetingEndedEvent event) {
+    try {
+      callbackUrlService.handleMessage(event);
+    } catch (Exception e) {
+      log.error("Error in callback url=[{}]", event.getCallbackUrl(), e);
     }
   }
 
@@ -901,7 +975,7 @@ public class MeetingService implements MessageListener {
       } else {
         if (message.userId.startsWith("v_")) {
           // A dial-in user joined the meeting. Dial-in users by convention has userId that starts with "v_".
-                    User vuser = new User(message.userId, message.userId, message.name, "DIAL-IN-USER", "no-avatar-url",
+                    User vuser = new User(message.userId, message.userId, message.name, "DIAL-IN-USER", "",
                             true, GuestPolicy.ALLOW, "DIAL-IN");
           vuser.setVoiceJoined(true);
           m.userJoined(vuser);
@@ -1079,6 +1153,7 @@ public class MeetingService implements MessageListener {
   public void stop() {
     processMessage = false;
     registeredUserCleaner.stop();
+    waitingGuestCleaner.stop();
   }
 
   public void setRecordingService(RecordingService s) {
@@ -1097,6 +1172,11 @@ public class MeetingService implements MessageListener {
     this.gw = gw;
   }
 
+  public void setWaitingGuestCleanupTimerTask(WaitingGuestCleanupTimerTask c) {
+    waitingGuestCleaner = c;
+    waitingGuestCleaner.setMeetingService(this);
+    waitingGuestCleaner.start();
+  }
 
   public void setRegisteredUserCleanupTimerTask(
     RegisteredUserCleanupTimerTask c) {

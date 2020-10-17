@@ -2,18 +2,44 @@ import { Meteor } from 'meteor/meteor';
 import { WebAppInternals } from 'meteor/webapp';
 import Langmap from 'langmap';
 import fs from 'fs';
-import heapdump from 'heapdump';
 import Users from '/imports/api/users';
 import './settings';
 import { lookup as lookupUserAgent } from 'useragent';
 import { check } from 'meteor/check';
-import memwatch from 'memwatch-next';
 import Logger from './logger';
 import Redis from './redis';
+
 import setMinBrowserVersions from './minBrowserVersion';
 import userLeaving from '/imports/api/users/server/methods/userLeaving';
 
+let guestWaitHtml = '';
 const AVAILABLE_LOCALES = fs.readdirSync('assets/app/locales');
+const FALLBACK_LOCALES = JSON.parse(Assets.getText('config/fallbackLocales.json'));
+
+const generateLocaleOptions = () => {
+  try {
+    Logger.warn('Calculating aggregateLocales (heavy)');
+    const tempAggregateLocales = AVAILABLE_LOCALES
+      .map(file => file.replace('.json', ''))
+      .map(file => file.replace('_', '-'))
+      .map((locale) => {
+        const localeName = (Langmap[locale] || {}).nativeName
+          || (FALLBACK_LOCALES[locale] || {}).nativeName
+          || locale;
+        return {
+          locale,
+          name: localeName,
+        };
+      });
+    Logger.warn(`Total locales: ${tempAggregateLocales.length}`, tempAggregateLocales);
+    return tempAggregateLocales;
+  } catch (e) {
+    Logger.error(`'Could not process locales error: ${e}`);
+    return [];
+  }
+};
+
+let avaibleLocalesNamesJSON = JSON.stringify(generateLocaleOptions());
 
 Meteor.startup(() => {
   const APP_CONFIG = Meteor.settings.public.app;
@@ -21,7 +47,11 @@ Meteor.startup(() => {
   const INTERVAL_TIME = INTERVAL_IN_SETTINGS < 10000 ? 10000 : INTERVAL_IN_SETTINGS;
   const env = Meteor.isDevelopment ? 'development' : 'production';
   const CDN_URL = APP_CONFIG.cdn;
-  let heapDumpMbThreshold = 100;
+
+  // Commenting out in BBB 2.3 as node12 does not allow for `memwatch`.
+  // We are looking for alternatives
+
+  /* let heapDumpMbThreshold = 100;
 
   const memoryMonitoringSettings = Meteor.settings.private.memoryMonitoring;
   if (memoryMonitoringSettings.stat.enabled) {
@@ -44,7 +74,7 @@ Meteor.startup(() => {
     memwatch.on('leak', (info) => {
       Logger.info('memwatch leak', info);
     });
-  }
+  } */
 
   if (CDN_URL.trim()) {
     // Add CDN
@@ -88,10 +118,9 @@ Meteor.startup(() => {
     Logger.info('Removing inactive users');
     users.forEach((user) => {
       Logger.info(`Detected inactive user, userId:${user.userId}, meetingId:${user.meetingId}`);
-      user.requesterUserId = user.userId;
-      return userLeaving(user, user.userId, user.connectionId);
+      return userLeaving(user.meetingId, user.userId, user.connectionId);
     });
-    return Logger.info('All inactive user have been removed');
+    return Logger.info('All inactive users have been removed');
   }, INTERVAL_TIME);
 
   Logger.warn(`SERVER STARTED.\nENV=${env},\nnodejs version=${process.version}\nCDN=${CDN_URL}\n`, APP_CONFIG);
@@ -109,7 +138,9 @@ WebApp.connectHandlers.use('/locale', (req, res) => {
   const APP_CONFIG = Meteor.settings.public.app;
   const fallback = APP_CONFIG.defaultSettings.application.fallbackLocale;
   const override = APP_CONFIG.defaultSettings.application.overrideLocale;
-  const browserLocale = override ? override.split(/[-_]/g) : req.query.locale.split(/[-_]/g);
+  const browserLocale = override && req.query.init === 'true'
+    ? override.split(/[-_]/g) : req.query.locale.split(/[-_]/g);
+
   const localeList = [fallback];
 
   const usableLocales = AVAILABLE_LOCALES
@@ -147,22 +178,13 @@ WebApp.connectHandlers.use('/locale', (req, res) => {
 });
 
 WebApp.connectHandlers.use('/locales', (req, res) => {
-  let locales = [];
-  try {
-    locales = AVAILABLE_LOCALES
-      .map(file => file.replace('.json', ''))
-      .map(file => file.replace('_', '-'))
-      .map(locale => ({
-        locale,
-        name: Langmap[locale].nativeName,
-      }));
-  } catch (e) {
-    Logger.warn(`'Could not process locales error: ${e}`);
+  if (!avaibleLocalesNamesJSON) {
+    avaibleLocalesNamesJSON = JSON.stringify(generateLocaleOptions());
   }
 
   res.setHeader('Content-Type', 'application/json');
   res.writeHead(200);
-  res.end(JSON.stringify(locales));
+  res.end(avaibleLocalesNamesJSON);
 });
 
 WebApp.connectHandlers.use('/feedback', (req, res) => {
@@ -221,6 +243,21 @@ WebApp.connectHandlers.use('/useragent', (req, res) => {
   res.writeHead(200);
   res.end(response);
 });
+
+WebApp.connectHandlers.use('/guestWait', (req, res) => {
+  if (!guestWaitHtml) {
+    try {
+      guestWaitHtml = Assets.getText('static/guest-wait/guest-wait.html');
+    } catch (e) {
+      Logger.warn(`Could not process guest wait html file: ${e}`);
+    }
+  }
+
+  res.setHeader('Content-Type', 'text/html');
+  res.writeHead(200);
+  res.end(guestWaitHtml);
+});
+
 
 export const eventEmitter = Redis.emitter;
 

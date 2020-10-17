@@ -43,7 +43,7 @@ const isLocked = () => {
   const meeting = Meetings.findOne({ meetingId: Auth.meetingID }, { fields: { 'lockSettingsProps.disableNote': 1 } });
   const user = Users.findOne({ userId: Auth.userID }, { fields: { locked: 1, role: 1 } });
 
-  if (meeting.lockSettingsProps && user.locked && user.role !== ROLE_MODERATOR) {
+  if (meeting.lockSettingsProps && user.role !== ROLE_MODERATOR) {
     return meeting.lockSettingsProps.disableNote;
   }
   return false;
@@ -67,6 +67,31 @@ const getRevs = () => {
   return note ? note.revs : 0;
 };
 
+const setLastRevs = (revs) => {
+  const lastRevs = getLastRevs();
+
+  if (revs !== 0 && revs > lastRevs) {
+    Session.set('noteLastRevs', revs);
+  }
+};
+
+const getLastRevs = () => {
+  const lastRevs = Session.get('noteLastRevs');
+
+  if (!lastRevs) return -1;
+  return lastRevs;
+};
+
+const hasUnreadNotes = () => {
+  const opened = isPanelOpened();
+  if (opened) return false;
+
+  const revs = getRevs();
+  const lastRevs = getLastRevs();
+
+  return (revs !== 0 && revs > lastRevs);
+};
+
 const isEnabled = () => {
   const note = Note.findOne({ meetingId: Auth.meetingID });
   return NOTE_CONFIG.enabled && note;
@@ -75,7 +100,7 @@ const isEnabled = () => {
 const toggleNotePanel = () => {
   Session.set(
     'openPanel',
-    isPanelOpened() ? 'userlist' : 'note'
+    isPanelOpened() ? 'userlist' : 'note',
   );
 };
 
@@ -89,4 +114,7 @@ export default {
   isEnabled,
   isPanelOpened,
   getRevs,
+  setLastRevs,
+  getLastRevs,
+  hasUnreadNotes,
 };
